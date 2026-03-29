@@ -1,0 +1,142 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import cv2
+import numpy as np
+import torch
+import torch.nn as nn
+import torchvision.transforms as transforms
+from torchvision import models
+import os
+
+app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+class SiameseNetwork(nn.Module):
+    def __init__(self):
+        super(SiameseNetwork, self).__init__()
+        self.resnet = models.resnet18(pretrained=True)
+        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, 128)
+
+    def forward(self, img1, img2):
+        feat1 = self.resnet(img1)
+        feat2 = self.resnet(img2)
+        return feat1, feat2
+
+siamese_model = SiameseNetwork().to(device)
+siamese_model.eval()
+
+class UNet(nn.Module):
+    def __init__(self):
+        super(UNet, self).__init__()
+        self.encoder = models.resnet18(pretrained=True)
+        self.encoder.fc = nn.Identity()
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(512, 256, 3, 2, 1, 1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(256, 128, 3, 2, 1, 1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(128, 64, 3, 2, 1, 1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, 1, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = self.encoder.conv1(x)
+        x = self.encoder.bn1(x)
+        x = self.encoder.relu(x)
+        x = self.encoder.layer1(x)
+        x = self.encoder.layer2(x)
+        x = self.encoder.layer3(x)
+        x = self.encoder.layer4(x)
+        x = self.decoder(x)
+        return x
+
+unet_model = UNet().to(device)
+unet_model.eval()
+
+
+class CNNModel(nn.Module):
+    def __init__(self):
+        super(CNNModel, self).__init__()
+        self.cnn = models.resnet18(pretrained=True)
+        self.cnn.fc = nn.Linear(self.cnn.fc.in_features, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.cnn(x)
+        return self.sigmoid(x) * 100  
+
+cnn_model = CNNModel().to(device)
+cnn_model.eval()
+
+def preprocess_image(image):
+    transform = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    return transform(image).unsqueeze(0).to(device)
+
+def calculate_damage_percentage(original, damaged):
+    original_tensor = preprocess_image(original)
+    damaged_tensor = preprocess_image(damaged)
+    
+    with torch.no_grad():
+        feat1, feat2 = siamese_model(original_tensor, damaged_tensor)
+    
+    distance = torch.norm(feat1 - feat2, p=2).item()
+    return round(min(max(distance * 10, 0), 100), 2)
+
+def segment_damage(image):
+    image_tensor = preprocess_image(image)
+    with torch.no_grad():
+        mask = unet_model(image_tensor)
+    
+    mask = mask.squeeze().cpu().numpy()
+    mask = (mask > 0.5).astype(np.uint8)
+    
+    damage_area_percentage = (np.sum(mask) / mask.size) * 100
+    return mask, round(float(damage_area_percentage), 2)
+
+def predict_damage(image):
+    image_tensor = preprocess_image(image)
+    with torch.no_grad():
+        damage_score = cnn_model(image_tensor).item()
+    return round(float(damage_score), 2)
+
+@app.route('/compare-images', methods=['POST'])
+def compare_images():
+    try:
+        file1 = request.files['image1']
+        file2 = request.files['image2']
+        img1 = cv2.imdecode(np.frombuffer(file1.read(), np.uint8), cv2.IMREAD_COLOR)
+        img2 = cv2.imdecode(np.frombuffer(file2.read(), np.uint8), cv2.IMREAD_COLOR)
+        damage_percentage = calculate_damage_percentage(img1, img2)
+        return jsonify({"damagePercentage": float(damage_percentage)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/segment-damage', methods=['POST'])
+def segment_damage_api():
+    try:
+        file = request.files['image']
+        img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), cv2.IMREAD_COLOR)
+        mask, damage_area_percentage = segment_damage(img)
+        return jsonify({"damageAreaPercentage": float(damage_area_percentage)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/predict-damage', methods=['POST'])
+def predict_damage_api():
+    try:
+        file = request.files['image']
+        img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), cv2.IMREAD_COLOR)
+        damage_score = predict_damage(img)
+        return jsonify({"damageScore": float(damage_score)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='127.0.0.1', port=5000, debug=True)

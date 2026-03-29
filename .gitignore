@@ -1,0 +1,14 @@
+# Node
+node_modules/
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# React
+build/
+
+# OS
+.DS_Store
