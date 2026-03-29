@@ -1,6 +1,7 @@
 const axios = require("axios");
 const fs = require("fs");
 const FormData = require("form-data");
+const ML_API = process.env.ML_API_URL;
 
 const compareImages = async (originalImagePath, damageImagePath) => {
   try {
@@ -11,11 +12,9 @@ const compareImages = async (originalImagePath, damageImagePath) => {
     formData.append("image1", fs.createReadStream(originalImagePath));
     formData.append("image2", fs.createReadStream(damageImagePath));
 
-    const response = await axios.post(
-      "http://127.0.0.1:5000/compare-images",
-      formData,
-      { headers: { ...formData.getHeaders() } }
-    );
+    const response = await axios.post(`${ML_API}/compare-images`, formData, {
+      headers: { ...formData.getHeaders() },
+    });
 
     return response.data;
   } catch (error) {

@@ -7,6 +7,7 @@ const compareImages = require("../services/imageComparisonService");
 const CustomerModel = require("../models/customerModel");
 const FormData = require("form-data");
 const axios = require("axios");
+const ML_API = process.env.ML_API_URL;
 const {
   generateInsuranceCertificate,
 } = require("../services/certificateGenerators");
@@ -28,7 +29,7 @@ const getCustomerPolicies = async (req, res) => {
       message: "Policies fetched successfully",
       policies: customerPolicies.map((policy) => ({
         ...policy.toObject(),
-        createdAt: policy.createdAt, 
+        createdAt: policy.createdAt,
       })),
     });
   } catch (err) {
@@ -44,18 +45,17 @@ const getAllPolicies = async (req, res) => {
 
     if (req.user.role === "government") {
       policies = await PolicyModel.find();
-    }
-    else if (req.user.role === "survey" || req.user.role === "customer") {
+    } else if (req.user.role === "survey" || req.user.role === "customer") {
       policies = await PolicyModel.find({ userId: req.user.id });
     } else {
       return res.status(403).json({ message: "Access denied" });
     }
 
     const waitingForGovernmentPolicies = policies.filter(
-      (policy) => policy.policyStatus === "waiting for government"
+      (policy) => policy.policyStatus === "waiting for government",
     );
     const otherPolicies = policies.filter(
-      (policy) => policy.policyStatus !== "waiting for government"
+      (policy) => policy.policyStatus !== "waiting for government",
     );
 
     return res.status(200).json({
@@ -114,8 +114,8 @@ const createPolicy = async (req, res) => {
     return res.status(201).json({
       message: "Policy created successfully",
       customer: await CustomerModel.findById(customerId).select(
-        "name email phoneNumber"
-      ), 
+        "name email phoneNumber",
+      ),
       policy: {
         policyId: newPolicy.policyId,
         type: newPolicy.type,
@@ -123,8 +123,8 @@ const createPolicy = async (req, res) => {
         city: newPolicy.city,
         insuranceAmount: newPolicy.insuranceAmount,
         policyStatus: newPolicy.policyStatus,
-        createdAt: createdAtDate, 
-        beforeDamageImage: newPolicy.beforeDamageImage, 
+        createdAt: createdAtDate,
+        beforeDamageImage: newPolicy.beforeDamageImage,
       },
     });
   } catch (err) {
@@ -137,7 +137,7 @@ const createPolicy = async (req, res) => {
 const approveRejectPolicy = async (req, res) => {
   try {
     const { policyId } = req.params;
-    const { action } = req.body; 
+    const { action } = req.body;
 
     if (!policyId || !["approve", "reject"].includes(action)) {
       return res.status(400).json({ message: "Invalid request parameters" });
@@ -145,7 +145,7 @@ const approveRejectPolicy = async (req, res) => {
 
     const policy = await PolicyModel.findOne({ policyId }).populate(
       "customerId",
-      "name email phoneNumber"
+      "name email phoneNumber",
     );
     if (!policy) {
       return res.status(404).json({ message: "Policy not found" });
@@ -158,7 +158,7 @@ const approveRejectPolicy = async (req, res) => {
 
     return res.status(200).json({
       message: `Policy ${action}d successfully`,
-      customer: policy.customerId, 
+      customer: policy.customerId,
       policy: {
         policyId: policy.policyId,
         type: policy.type,
@@ -166,8 +166,8 @@ const approveRejectPolicy = async (req, res) => {
         city: policy.city,
         insuranceAmount: policy.insuranceAmount,
         policyStatus: policy.policyStatus,
-        createdAt: createdAtDate, 
-        beforeDamageImage: policy.beforeDamageImage, 
+        createdAt: createdAtDate,
+        beforeDamageImage: policy.beforeDamageImage,
       },
     });
   } catch (err) {
@@ -192,7 +192,7 @@ const claimPolicy = async (req, res) => {
 
     const policy = await PolicyModel.findOne({ policyId }).populate(
       "customerId",
-      "name email phoneNumber"
+      "name email phoneNumber",
     );
     if (!policy) {
       return res.status(404).json({ message: "Policy not found." });
@@ -276,7 +276,7 @@ const getCertificate = async (req, res) => {
     const doc = new PDFDocument();
     const certificatePath = path.join(
       certificatesDir,
-      `${policy.policyId}_certificate.pdf`
+      `${policy.policyId}_certificate.pdf`,
     );
 
     // Create a write stream to save the PDF to disk
@@ -331,7 +331,7 @@ const reviewClaimBySurveyor = async (req, res) => {
 
     const policy = await PolicyModel.findOne({ policyId }).populate(
       "customerId",
-      "name email phoneNumber"
+      "name email phoneNumber",
     );
 
     if (!policy) return res.status(404).json({ message: "Policy not found." });
@@ -346,11 +346,8 @@ const reviewClaimBySurveyor = async (req, res) => {
     const originalImagePath = policy.beforeDamageImage;
     const damageImagePath = policy.claimDetails.damageImage;
 
-
     if (!fs.existsSync(originalImagePath)) {
-      console.error(
-        `Error: Original image not found at ${originalImagePath}`
-      );
+      console.error(`Error: Original image not found at ${originalImagePath}`);
       return res
         .status(400)
         .json({ message: "Original image not found on server." });
@@ -369,9 +366,9 @@ const reviewClaimBySurveyor = async (req, res) => {
 
     try {
       const compareResponse = await axios.post(
-        "http://127.0.0.1:5000/compare-images",
+        `${ML_API}/compare-images`,
         formData,
-        { headers: { ...formData.getHeaders() } }
+        { headers: { ...formData.getHeaders() } },
       );
 
       const { damagePercentage } = compareResponse.data;
@@ -380,9 +377,9 @@ const reviewClaimBySurveyor = async (req, res) => {
       predictFormData.append("image", fs.createReadStream(damageImagePath));
 
       const predictResponse = await axios.post(
-        "http://127.0.0.1:5000/predict-damage",
+        `${ML_API}/predict-damage`,
         predictFormData,
-        { headers: { ...predictFormData.getHeaders() } }
+        { headers: { ...predictFormData.getHeaders() } },
       );
 
       const { damageScore } = predictResponse.data;
@@ -412,7 +409,7 @@ const reviewClaimBySurveyor = async (req, res) => {
           city: policy.city,
           insuranceAmount: policy.insuranceAmount,
           policyStatus: policy.policyStatus,
-          createdAt: policy.createdAtDate, 
+          createdAt: policy.createdAtDate,
           beforeDamageImage: policy.beforeDamageImage,
         },
         claimDetails: {
@@ -424,7 +421,7 @@ const reviewClaimBySurveyor = async (req, res) => {
         surveyorReport: {
           assessment: policy.surveyorReport.assessment,
           surveyorComments: policy.surveyorReport.surveyorComments,
-          damagePercentage: policy.surveyorReport.damagePercentage, 
+          damagePercentage: policy.surveyorReport.damagePercentage,
         },
       });
     } catch (err) {
@@ -439,7 +436,6 @@ const reviewClaimBySurveyor = async (req, res) => {
 
 const getAllClaimPolicy = async (req, res) => {
   try {
-  
     const claimedPolicies = await PolicyModel.find({
       "claimDetails.claimId": { $exists: true },
     });
@@ -485,7 +481,7 @@ const approveRejectClaimByGovernment = async (req, res) => {
     }
 
     let payoutAmount = Math.round(
-      (damagePercentage / 100) * policy.insuranceAmount
+      (damagePercentage / 100) * policy.insuranceAmount,
     );
 
     policy.claimDetails.status = action === "approve" ? "approved" : "rejected";
@@ -497,13 +493,11 @@ const approveRejectClaimByGovernment = async (req, res) => {
 
     let certificatePath = "";
     if (action === "approve") {
-     
       certificatePath = await generateInsuranceCertificate(
         policy,
-        policy.customerId
+        policy.customerId,
       );
 
-      
       await NotificationModel.create({
         customerId: policy.customerId._id,
         policyId: policy._id,
@@ -539,7 +533,7 @@ const approveRejectClaimByGovernment = async (req, res) => {
         status: policy.claimDetails.status,
         payoutAmount: policy.claimDetails.payoutAmount,
       },
-      certificatePath: action === "approve" ? certificatePath : null, 
+      certificatePath: action === "approve" ? certificatePath : null,
     });
   } catch (err) {
     console.error("Error in approveRejectClaimByGovernment:", err.message);
@@ -551,7 +545,7 @@ const approveRejectClaimByGovernment = async (req, res) => {
 
 const getCustomerNotifications = async (req, res) => {
   try {
-    const customerId = req.user.id; 
+    const customerId = req.user.id;
 
     const notifications = await NotificationModel.find({ customerId }).sort({
       createdAt: -1,
