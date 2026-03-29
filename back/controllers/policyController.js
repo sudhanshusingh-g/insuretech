@@ -342,9 +342,17 @@ const reviewClaimBySurveyor = async (req, res) => {
         .json({ message: "Claim must be under review first." });
     }
 
-    const uploadsDir = path.join(__dirname, "uploads");
-    const originalImagePath = policy.beforeDamageImage;
-    const damageImagePath = policy.claimDetails.damageImage;
+    const uploadsDir = path.join(__dirname, "..", "uploads");
+    const originalImagePath = path.join(
+      __dirname,
+      "..",
+      policy.beforeDamageImage,
+    );
+    const damageImagePath = path.join(
+      __dirname,
+      "..",
+      policy.claimDetails.damageImage,
+    );
 
     if (!fs.existsSync(originalImagePath)) {
       console.error(`Error: Original image not found at ${originalImagePath}`);
