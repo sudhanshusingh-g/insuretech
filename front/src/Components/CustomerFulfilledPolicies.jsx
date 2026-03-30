@@ -2,34 +2,28 @@ import { Button } from '@mui/material'
 import axios from 'axios';
 import React from 'react'
 import toast from 'react-hot-toast';
-
-const BASE_URL = "http://localhost:12000";
+import { resolveAssetUrl } from '../config';
 
 const CustomerFulfilledPolicies = ({ customerFulfilledPolicies }) => {
 
     const handleDownload = async (pdfFilePath) => {
         try {
-            // Construct full file URL
-            const fileUrl = `${BASE_URL}${pdfFilePath}`;
+            const fileUrl = resolveAssetUrl(pdfFilePath);
 
-            // Fetch the PDF file from the server
             const response = await axios.get(fileUrl, {
-                responseType: "blob", // Important for downloading binary files
+                responseType: "blob",
             });
 
-            // Create a blob from the response data
             const blob = new Blob([response.data], { type: "application/pdf" });
             const url = window.URL.createObjectURL(blob);
 
-            // Create a temporary link and trigger download
             const a = document.createElement("a");
             a.href = url;
-            a.download = pdfFilePath.split("/").pop(); // Extracts filename from path
+            a.download = fileUrl.split("/").pop();
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
 
-            // Revoke the object URL to free up memory
             window.URL.revokeObjectURL(url);
         } catch (error) {
             console.error("Error downloading PDF:", error);

@@ -5,6 +5,7 @@ import { Box, Button, TextField, Typography } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { useTheme, useMediaQuery } from "@mui/material";
+import { API_BASE_URL } from "../config";
 
 const Register = () => {
   const [registerData, setRegisterData] = useState({
@@ -31,7 +32,7 @@ const Register = () => {
   const handleRegister = async () => {
     try {
       const response = await axios.post(
-        "http://localhost:12000/api/customers/register",
+        `${API_BASE_URL}/customers/register`,
         {
           name: registerData.name,
           email: registerData.email,

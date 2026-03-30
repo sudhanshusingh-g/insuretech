@@ -14,8 +14,7 @@ import {
     objectDamageData,
 } from "../Redux/Slice/dataSlice";
 import toast from "react-hot-toast";
-
-const BASE_URL = "http://localhost:12000/";
+import { resolveAssetUrl } from "../config";
 
 const ViewPolicyDetails = ({ open, handleClose, viewPolicy }) => {
     const [assessment, setAssessment] = useState("");
@@ -39,6 +38,8 @@ const ViewPolicyDetails = ({ open, handleClose, viewPolicy }) => {
                 dispatch(getSurveyorPolicyList());
                 toast.success("Review submitted to government!");
                 setDamagePercentage(res?.payload?.surveyorReport?.damagePercentage);
+            } else if (res?.meta?.requestStatus === "rejected") {
+                toast.error(res?.payload || "Damage calculation failed");
             }
         });
     };
@@ -47,6 +48,10 @@ const ViewPolicyDetails = ({ open, handleClose, viewPolicy }) => {
         handleClose()
         setDamagePercentage(null)
     }
+
+    const getImageSrc = (imagePath) => {
+        return resolveAssetUrl(imagePath);
+    };
 
     return (
         <Dialog
@@ -141,7 +146,8 @@ const ViewPolicyDetails = ({ open, handleClose, viewPolicy }) => {
                             height: "auto",
                             border: "1px solid black",
                         }}
-                        src={`${BASE_URL}${viewPolicy?.beforeDamageImage}`}
+                        src={getImageSrc(viewPolicy?.beforeDamageImage)}
+                        alt="Before damage"
                     />
                     <img
                         style={{
@@ -149,7 +155,8 @@ const ViewPolicyDetails = ({ open, handleClose, viewPolicy }) => {
                             height: "auto",
                             border: "1px solid black",
                         }}
-                        src={`${BASE_URL}${viewPolicy?.claimDetails?.damageImage}`}
+                        src={getImageSrc(viewPolicy?.claimDetails?.damageImage)}
+                        alt="After damage"
                     />
                 </Box>
 

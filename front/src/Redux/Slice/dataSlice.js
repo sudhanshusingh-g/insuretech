@@ -248,12 +248,18 @@ export const getSurveyorPolicyList = createAsyncThunk(
 
 export const objectDamageData = createAsyncThunk(
     "OBJECT/DAMAGE/DATA",
-    async (data) => {
+    async (data, { rejectWithValue }) => {
         try {
             const response = await damageCalculation(data);
             return response;
         } catch (error) {
             console.log("Damage Calculation Error: ", error)
+            return rejectWithValue(
+                error?.response?.data?.message ||
+                error?.response?.data?.error ||
+                error?.message ||
+                "Damage calculation failed"
+            );
         }
     }
 );

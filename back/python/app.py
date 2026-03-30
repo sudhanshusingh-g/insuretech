@@ -7,6 +7,27 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from torchvision import models
 import gc
+import os
+from pathlib import Path
+
+
+def load_env_file(file_path):
+    if not file_path.exists():
+        return
+
+    for line in file_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+python_dir = Path(__file__).resolve().parent
+app_env = os.getenv("APP_ENV", "development")
+load_env_file(python_dir / f".env.{app_env}")
+load_env_file(python_dir / ".env")
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -215,4 +236,7 @@ def predict_damage_api():
 # -------------------------------
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    host = os.getenv("ML_HOST", "0.0.0.0")
+    port = int(os.getenv("ML_PORT", "5001"))
+    debug = os.getenv("ML_DEBUG", "false").lower() == "true"
+    app.run(host=host, port=port, debug=debug)

@@ -1,17 +1,15 @@
 const PolicyModel = require("../models/policyModel");
 const mongoose = require("mongoose");
-const fs = require("fs");
-const path = require("path");
-const PDFDocument = require("pdfkit");
-const compareImages = require("../services/imageComparisonService");
 const CustomerModel = require("../models/customerModel");
 const FormData = require("form-data");
 const axios = require("axios");
 const ML_API = process.env.ML_API_URL;
+const ML_TIMEOUT_MS = 120000;
 const {
   generateInsuranceCertificate,
 } = require("../services/certificateGenerators");
 const NotificationModel = require("../models/NotificationModel");
+const { uploadImageFile } = require("../services/cloudinaryService");
 
 const insuranceAmounts = {
   home: 500000,
@@ -19,6 +17,7 @@ const insuranceAmounts = {
   health: 200000,
   other: 400000,
 };
+
 const getCustomerPolicies = async (req, res) => {
   try {
     const customerPolicies = await PolicyModel.find({
@@ -39,13 +38,14 @@ const getCustomerPolicies = async (req, res) => {
       .json({ message: "Server error, please try again later" });
   }
 };
+
 const getAllPolicies = async (req, res) => {
   try {
     let policies = [];
 
     if (req.user.role === "government") {
       policies = await PolicyModel.find();
-    } else if (req.user.role === "survey" || req.user.role === "customer") {
+    } else if (req.user.role === "surveyor" || req.user.role === "customer") {
       policies = await PolicyModel.find({ userId: req.user.id });
     } else {
       return res.status(403).json({ message: "Access denied" });
@@ -70,15 +70,15 @@ const getAllPolicies = async (req, res) => {
       .json({ message: "Server error, please try again later." });
   }
 };
+
 const createPolicy = async (req, res) => {
   try {
     const { phoneNumber, type, address, city, customerId } = req.body;
-    const beforeDamageImage = req.file ? `uploads/${req.file.filename}` : null;
 
     if (
       !phoneNumber ||
       !type ||
-      !beforeDamageImage ||
+      !req.file ||
       !address ||
       !city ||
       !customerId
@@ -95,13 +95,19 @@ const createPolicy = async (req, res) => {
       });
     }
 
+    const uploadedBeforeDamageImage = await uploadImageFile(
+      req.file,
+      "insurance/policies/before-damage",
+      `${customerId}-${Date.now()}-${normalizedType}`,
+    );
+
     const newPolicy = new PolicyModel({
       customerId,
       phoneNumber,
       type: normalizedType,
       address,
       city,
-      beforeDamageImage,
+      beforeDamageImage: uploadedBeforeDamageImage.secure_url,
       policyId: new mongoose.Types.ObjectId().toHexString(),
       policyStatus: "pending",
       insuranceAmount: insuranceAmounts[normalizedType],
@@ -134,6 +140,7 @@ const createPolicy = async (req, res) => {
       .json({ message: "Server error, please try again later" });
   }
 };
+
 const approveRejectPolicy = async (req, res) => {
   try {
     const { policyId } = req.params;
@@ -177,14 +184,13 @@ const approveRejectPolicy = async (req, res) => {
       .json({ message: "Server error, please try again later" });
   }
 };
+
 const claimPolicy = async (req, res) => {
   try {
     const { policyId } = req.params;
     const { damageDescription } = req.body;
-    // const damageImage = req.file ? req.file.path : null;
-    const damageImage = req.file ? `uploads/${req.file.filename}` : null;
 
-    if (!damageDescription || !damageImage) {
+    if (!damageDescription || !req.file) {
       return res
         .status(400)
         .json({ message: "Damage description and image are required." });
@@ -198,14 +204,19 @@ const claimPolicy = async (req, res) => {
       return res.status(404).json({ message: "Policy not found." });
     }
 
-    // Generate Claim ID and Date
+    const uploadedDamageImage = await uploadImageFile(
+      req.file,
+      "insurance/policies/damage-claims",
+      `${policyId}-${Date.now()}-damage`,
+    );
+
     const claimId = new mongoose.Types.ObjectId().toHexString();
-    const claimDate = new Date().toISOString().split("T")[0]; // Extract only the date
+    const claimDate = new Date().toISOString().split("T")[0];
 
     policy.claimDetails = {
       claimId,
       damageDescription,
-      damageImage,
+      damageImage: uploadedDamageImage.secure_url,
       status: "pending",
       date: claimDate,
     };
@@ -213,12 +224,11 @@ const claimPolicy = async (req, res) => {
     policy.policyStatus = "under review";
     await policy.save();
 
-    // Format createdAt date
     const createdAtDate = policy.createdAt.toISOString().split("T")[0];
 
     return res.status(201).json({
       message: "Claim request submitted successfully. Surveyor will review it.",
-      customer: policy.customerId, // Fetch only customer details
+      customer: policy.customerId,
       policy: {
         policyId: policy.policyId,
         type: policy.type,
@@ -226,15 +236,15 @@ const claimPolicy = async (req, res) => {
         city: policy.city,
         insuranceAmount: policy.insuranceAmount,
         policyStatus: policy.policyStatus,
-        createdAt: createdAtDate, // Show only the date
-        beforeDamageImage: policy.beforeDamageImage, // Include beforeDamageImage in response
+        createdAt: createdAtDate,
+        beforeDamageImage: policy.beforeDamageImage,
       },
       claim: {
         claimId,
         damageDescription,
-        damageImage,
+        damageImage: uploadedDamageImage.secure_url,
         status: "pending",
-        date: claimDate, // Show only the date
+        date: claimDate,
       },
     });
   } catch (err) {
@@ -244,6 +254,7 @@ const claimPolicy = async (req, res) => {
       .json({ message: "Server error, please try again later." });
   }
 };
+
 const getCertificate = async (req, res) => {
   try {
     const { policyId } = req.params;
@@ -252,71 +263,33 @@ const getCertificate = async (req, res) => {
       return res.status(400).json({ message: "Policy ID is required." });
     }
 
-    const policy = await PolicyModel.findOne({ policyId });
+    const policy = await PolicyModel.findOne({ policyId }).populate(
+      "customerId",
+      "name email phoneNumber",
+    );
     if (!policy) {
       return res.status(404).json({ message: "Policy not found." });
     }
 
     if (
+      policy.policyStatus !== "active" &&
       policy.policyStatus !== "approved" &&
       policy.policyStatus !== "fulfilled"
     ) {
-      return res
-        .status(400)
-        .json({ message: "Policy is not approved or fulfilled yet." });
+      return res.status(400).json({
+        message: "Policy is not active, approved, or fulfilled yet.",
+      });
     }
 
-    // Ensure the certificates directory exists
-    const certificatesDir = path.join(__dirname, "../certificates");
-    if (!fs.existsSync(certificatesDir)) {
-      fs.mkdirSync(certificatesDir);
-    }
-
-    // Generate Certificate PDF
-    const doc = new PDFDocument();
-    const certificatePath = path.join(
-      certificatesDir,
-      `${policy.policyId}_certificate.pdf`,
+    const certificateUrl = await generateInsuranceCertificate(
+      policy,
+      policy.customerId,
     );
 
-    // Create a write stream to save the PDF to disk
-    const writeStream = fs.createWriteStream(certificatePath);
-
-    // Add content to the certificate PDF
-    doc.fontSize(20).text("Insurance Policy Certificate", { align: "center" });
-    doc.moveDown();
-    doc.fontSize(14).text(`Policy ID: ${policy.policyId}`);
-    doc.text(`Customer Phone Number: ${policy.phoneNumber}`);
-    doc.text(`Policy Type: ${policy.type}`);
-    doc.text(`Address: ${policy.address}`);
-    doc.text(`City: ${policy.city}`);
-    doc.text(`Policy Status: ${policy.policyStatus}`);
-    doc.text(`Date of Issue: ${new Date().toLocaleDateString()}`);
-    doc.moveDown();
-
-    if (policy.policyStatus === "fulfilled") {
-      doc.text("Policy Fulfilled By the Government", { align: "center" });
-    } else if (policy.policyStatus === "approved") {
-      doc.text("Policy Approved By the Government", { align: "center" });
-    }
-
-    // Pipe the document to the write stream
-    doc.pipe(writeStream);
-
-    // Wait until the PDF is fully written
-    writeStream.on("finish", () => {
-      // Check if the certificate file exists and send it as a response
-      if (fs.existsSync(certificatePath)) {
-        return res.status(200).sendFile(certificatePath);
-      } else {
-        return res
-          .status(404)
-          .json({ message: "Certificate generation failed." });
-      }
+    return res.status(200).json({
+      message: "Certificate generated successfully.",
+      certificateUrl,
     });
-
-    // Finalize the PDF
-    doc.end();
   } catch (err) {
     console.error("Error in getCertificate:", err);
     return res
@@ -324,6 +297,7 @@ const getCertificate = async (req, res) => {
       .json({ message: "Server error, please try again later." });
   }
 };
+
 const reviewClaimBySurveyor = async (req, res) => {
   try {
     const { policyId } = req.params;
@@ -334,7 +308,9 @@ const reviewClaimBySurveyor = async (req, res) => {
       "name email phoneNumber",
     );
 
-    if (!policy) return res.status(404).json({ message: "Policy not found." });
+    if (!policy) {
+      return res.status(404).json({ message: "Policy not found." });
+    }
 
     if (policy.policyStatus !== "under review") {
       return res
@@ -342,52 +318,55 @@ const reviewClaimBySurveyor = async (req, res) => {
         .json({ message: "Claim must be under review first." });
     }
 
-    const uploadsDir = path.join(__dirname, "..", "uploads");
-    const originalImagePath = path.join(
-      __dirname,
-      "..",
-      policy.beforeDamageImage,
-    );
-    const damageImagePath = path.join(
-      __dirname,
-      "..",
-      policy.claimDetails.damageImage,
-    );
-
-    if (!fs.existsSync(originalImagePath)) {
-      console.error(`Error: Original image not found at ${originalImagePath}`);
-      return res
-        .status(400)
-        .json({ message: "Original image not found on server." });
+    if (!policy.beforeDamageImage || !policy.claimDetails?.damageImage) {
+      return res.status(400).json({
+        message: "Both policy and claim images are required for review.",
+      });
     }
 
-    if (!fs.existsSync(damageImagePath)) {
-      console.error(`Error: Damage image not found at ${damageImagePath}`);
-      return res
-        .status(400)
-        .json({ message: "Damage image not found on server." });
-    }
+    const [originalImageResponse, damageImageResponse] = await Promise.all([
+      axios.get(policy.beforeDamageImage, { responseType: "arraybuffer" }),
+      axios.get(policy.claimDetails.damageImage, { responseType: "arraybuffer" }),
+    ]);
+
+    const originalImageBuffer = Buffer.from(originalImageResponse.data);
+    const damageImageBuffer = Buffer.from(damageImageResponse.data);
 
     const formData = new FormData();
-    formData.append("image1", fs.createReadStream(originalImagePath));
-    formData.append("image2", fs.createReadStream(damageImagePath));
+    formData.append("image1", originalImageBuffer, {
+      filename: "before-damage.jpg",
+      contentType: originalImageResponse.headers["content-type"] || "image/jpeg",
+    });
+    formData.append("image2", damageImageBuffer, {
+      filename: "damage-image.jpg",
+      contentType: damageImageResponse.headers["content-type"] || "image/jpeg",
+    });
 
     try {
       const compareResponse = await axios.post(
         `${ML_API}/compare-images`,
         formData,
-        { headers: { ...formData.getHeaders() } },
+        {
+          headers: { ...formData.getHeaders() },
+          timeout: ML_TIMEOUT_MS,
+        },
       );
 
       const { damagePercentage } = compareResponse.data;
 
       const predictFormData = new FormData();
-      predictFormData.append("image", fs.createReadStream(damageImagePath));
+      predictFormData.append("image", damageImageBuffer, {
+        filename: "damage-image.jpg",
+        contentType: damageImageResponse.headers["content-type"] || "image/jpeg",
+      });
 
       const predictResponse = await axios.post(
         `${ML_API}/predict-damage`,
         predictFormData,
-        { headers: { ...predictFormData.getHeaders() } },
+        {
+          headers: { ...predictFormData.getHeaders() },
+          timeout: ML_TIMEOUT_MS,
+        },
       );
 
       const { damageScore } = predictResponse.data;
@@ -417,7 +396,7 @@ const reviewClaimBySurveyor = async (req, res) => {
           city: policy.city,
           insuranceAmount: policy.insuranceAmount,
           policyStatus: policy.policyStatus,
-          createdAt: policy.createdAtDate,
+          createdAt: policy.createdAt?.toISOString().split("T")[0],
           beforeDamageImage: policy.beforeDamageImage,
         },
         claimDetails: {
@@ -430,11 +409,16 @@ const reviewClaimBySurveyor = async (req, res) => {
           assessment: policy.surveyorReport.assessment,
           surveyorComments: policy.surveyorReport.surveyorComments,
           damagePercentage: policy.surveyorReport.damagePercentage,
+          damageScore: policy.surveyorReport.damageScore,
         },
       });
     } catch (err) {
       console.error("Error sending images to Flask:", err.message);
-      return res.status(500).json({ message: "Error comparing images." });
+      return res.status(502).json({
+        message: "ML service request failed.",
+        error: err.message,
+        mlApiUrl: ML_API,
+      });
     }
   } catch (err) {
     console.error("Server Error in reviewClaimBySurveyor:", err.message);
@@ -455,9 +439,10 @@ const getAllClaimPolicy = async (req, res) => {
     return res.status(200).json(claimedPolicies);
   } catch (error) {
     console.error("Error fetching claimed policies:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 };
+
 const approveRejectClaimByGovernment = async (req, res) => {
   try {
     const { claimId } = req.params;
@@ -465,6 +450,10 @@ const approveRejectClaimByGovernment = async (req, res) => {
 
     if (!mongoose.isValidObjectId(claimId)) {
       return res.status(400).json({ message: "Invalid claim ID format." });
+    }
+
+    if (!["approve", "reject"].includes(action)) {
+      return res.status(400).json({ message: "Invalid action." });
     }
 
     const policy = await PolicyModel.findOne({
@@ -481,14 +470,14 @@ const approveRejectClaimByGovernment = async (req, res) => {
         .json({ message: "Claim must be reviewed by a surveyor first." });
     }
 
-    let damagePercentage = policy.surveyorReport?.damagePercentage;
-    if (!damagePercentage) {
+    const damagePercentage = policy.surveyorReport?.damagePercentage;
+    if (damagePercentage == null) {
       return res
         .status(400)
         .json({ message: "Damage percentage not found in surveyor report." });
     }
 
-    let payoutAmount = Math.round(
+    const payoutAmount = Math.round(
       (damagePercentage / 100) * policy.insuranceAmount,
     );
 
@@ -509,7 +498,7 @@ const approveRejectClaimByGovernment = async (req, res) => {
       await NotificationModel.create({
         customerId: policy.customerId._id,
         policyId: policy._id,
-        claimId: claimId,
+        claimId,
         policyStatus: policy.policyStatus,
         payoutAmount: policy.payoutAmount,
         message: `Your insurance claim for ${policy.type} has been approved. Certificate available for download.`,
@@ -574,7 +563,6 @@ module.exports = {
   approveRejectPolicy,
   claimPolicy,
   getCertificate,
-  claimPolicy,
   approveRejectClaimByGovernment,
   reviewClaimBySurveyor,
   getCustomerPolicies,
